@@ -85,6 +85,7 @@ source $ZSH/oh-my-zsh.sh
 # Example aliases
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
+source ~/.zsh_profile
 
 # Allow easy execution of arithmatic functions from the command line, i.e. $ py "sqrt(128)"
 function py {
