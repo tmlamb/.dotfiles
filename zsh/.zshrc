@@ -56,7 +56,7 @@ zstyle ':omz:update' mode reminder  # just remind me to update when it's time
 # Custom plugins may be added to $ZSH_CUSTOM/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git dotenv node npm yarn minikube kubectl golang emoji aws rust zsh-z)
+plugins=(git zsh-autosuggestions)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -86,26 +86,9 @@ source $ZSH/oh-my-zsh.sh
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 
-. $HOME/.asdf/asdf.sh
-. $HOME/.asdf/completions/asdf.bash
-
 # Allow easy execution of arithmatic functions from the command line, i.e. $ py "sqrt(128)"
 function py {
 	python3 -c "from math import *; print($*)"
 }
 
-# Allow viddy to run aliased commands, i.e. $ vd kgp
-function vd() {
-	viddy -d -n 1 --shell zsh  "$(which $1 | cut -d' ' -f 4-)"
-}
-
 export USE_GKE_GCLOUD_AUTH_PLUGIN=True
-
-. ~/.asdf/plugins/java/set-java-home.zsh
-
-export PATH=$PATH:/usr/local/go/bin
-export GOPATH=$HOME/go
-export PATH=$GOPATH/bin:$PATH
-
-# add Pulumi to the PATH
-export PATH=$PATH:$HOME/.pulumi/bin
