@@ -4,4 +4,3 @@ alias my_ip="ip address | grep -o \"inet 192.*/\" | awk '{ print \$2 }' | tr / '
 alias vim="$VIM"
 alias python="python3"
 alias yolo="git push origin master --force --no-verify"
-
