@@ -93,3 +93,6 @@ function py {
 }
 
 export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+
+source /usr/share/doc/fzf/examples/key-bindings.zsh
+source /usr/share/doc/fzf/examples/completion.zsh
