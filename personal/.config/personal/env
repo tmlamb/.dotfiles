@@ -11,3 +11,8 @@ addToPathFront() {
         export PATH=$1:$PATH
     fi
 }
+
+change_background() {
+    dconf write /org/mate/desktop/background/picture-filename "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
+    dconf write /org/mate/desktop/background/picture-options "'zoom'"
+}
