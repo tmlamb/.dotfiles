@@ -1,6 +1,10 @@
 #!/usr/bin/env zsh
 if [[ -z $STOW_FOLDERS ]]; then
-    STOW_FOLDERS="bin,nvim,personal,zsh,tmux,i3"
+    if [[ $OSTYPE == 'darwin'* ]]; then
+        STOW_FOLDERS="bin,nvim,personal,zsh,tmux,i3"
+    else
+        STOW_FOLDERS="bin,nvim,personal,zsh,tmux"
+    fi
 fi
 
 if [[ -z $DOTFILES ]]; then
