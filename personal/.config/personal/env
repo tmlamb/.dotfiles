@@ -1,5 +1,3 @@
-export STOW_FOLDERS="bin,nvim,personal,zsh,tmux,i3"
-
 addToPath() {
     if [[ "$PATH" != *"$1"* ]]; then
         export PATH=$PATH:$1
@@ -13,6 +11,10 @@ addToPathFront() {
 }
 
 change_background() {
-    dconf write /org/mate/desktop/background/picture-filename "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
-    dconf write /org/mate/desktop/background/picture-options "'zoom'"
+    if [[ $OSTYPE == 'darwin'* ]]; then
+        echo 'Implementation missing'
+    else
+        dconf write /org/mate/desktop/background/picture-filename "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
+        dconf write /org/mate/desktop/background/picture-options "'zoom'"
+    fi
 }
