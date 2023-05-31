@@ -8,6 +8,11 @@ return require('packer').startup(function(use)
   use 'wbthomason/packer.nvim'
 
   use {
+    "folke/trouble.nvim",
+    requires = "nvim-tree/nvim-web-devicons",
+  }
+
+  use {
     'nvim-telescope/telescope.nvim', tag = '0.1.0',
     -- or                            , branch = '0.1.x',
     requires = { { 'nvim-lua/plenary.nvim' } }
@@ -25,7 +30,7 @@ return require('packer').startup(function(use)
   use('nvim-treesitter/playground')
   use('theprimeagen/harpoon')
   use('mbbill/undotree')
-  use('tpope/vim-fugitive')
+  use {'tpope/vim-rhubarb', requires = {'tpope/vim-fugitive'}}
   use {
     'VonHeikemen/lsp-zero.nvim',
     requires = {
