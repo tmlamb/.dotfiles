@@ -57,4 +57,5 @@ return require('packer').startup(function(use)
 
   use("sbdchd/neoformat")
 
+  use("norcalli/nvim-colorizer.lua")
 end)
