@@ -14,7 +14,8 @@ change_background() {
     if [[ $OSTYPE == 'darwin'* ]]; then
         echo 'Implementation missing'
     else
-        dconf write /org/mate/desktop/background/picture-filename "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
-        dconf write /org/mate/desktop/background/picture-options "'zoom'"
+        # dconf write /org/mate/desktop/background/picture-filename "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
+        # dconf write /org/mate/desktop/background/picture-options "'zoom'"
+        feh --bg-scale --zoom fill "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
     fi
 }
