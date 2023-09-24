@@ -16,6 +16,6 @@ change_background() {
     else
         # dconf write /org/mate/desktop/background/picture-filename "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
         # dconf write /org/mate/desktop/background/picture-options "'zoom'"
-        feh --bg-scale --zoom fill "'$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)'"
+        feh --bg-scale --zoom fill "$HOME/Pictures/backgrounds/$(ls ~/Pictures/backgrounds | fzf)"
     fi
 }
