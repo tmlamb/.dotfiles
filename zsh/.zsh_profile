@@ -11,6 +11,7 @@ export GOPATH=$HOME/go
 export GIT_EDITOR=$VIM
 export N_PREFIX="$HOME/.local"
 export DOTFILES=$HOME/.dotfiles
+export TERMINAL="alacritty"
 
 addToPathFront $HOME/.local/.npm-global/bin
 addToPathFront $HOME/.local/scripts
