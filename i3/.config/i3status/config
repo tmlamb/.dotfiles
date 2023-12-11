@@ -12,7 +12,7 @@ general {
         markup = "pango"
 }
 
-order += "ethernet mrdo"
+order += "ethernet mrd0"
 order += "disk /"
 order += "battery all"
 order += "load"
@@ -34,7 +34,7 @@ disk "/" {
         format = "%avail"
 }
 
-ethernet mrdo {
-    format_up = "<span color='#959fff'>MRDO UP</span>"
+ethernet mrd0 {
+    format_up = "<span color='#959fff'>mrd0 UP</span>"
     format_down = ""
 }
