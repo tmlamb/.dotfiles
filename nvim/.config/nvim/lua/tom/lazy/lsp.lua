@@ -34,6 +34,7 @@ return {
           "angularls",
           "cssls",
           "tailwindcss",
+          "gopls",
         },
         handlers = {
           function(server_name)
@@ -67,6 +68,19 @@ return {
                   diagnostics = {
                     globals = { 'vim' },
                   },
+                },
+              },
+            })
+          end,
+          ["gopls"] = function()
+            require('lspconfig')['gopls'].setup({
+              capabilities = cababilities,
+              settings = {
+                gopls = {
+                  analyses = {
+                    unusedparams = true,
+                  },
+                  staticcheck = true,
                 },
               },
             })

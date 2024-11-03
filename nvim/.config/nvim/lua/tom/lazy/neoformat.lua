@@ -9,7 +9,7 @@ return {
       vim.g.neoformat_try_node_exe = 1
       -- ,'TextChanged','InsertLeave'
       autocmd({'BufWritePre'}, {
-        pattern = {'*.js', '*.ts', '*.jsx', '*.tsx', '*.css', '*.scss', '*.html', '*.json', '*.yaml', '*.yml', '*.md'},
+        pattern = {'*.js', '*.ts', '*.jsx', '*.tsx', '*.css', '*.scss', '*.html', '*.json', '*.yaml', '*.yml', '*.md', '*.go'},
         command = ':Neoformat'
       })
     end
