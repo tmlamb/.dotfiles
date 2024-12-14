@@ -12,6 +12,7 @@ return {
       "L3MON4D3/LuaSnip",
       "saadparwaiz1/cmp_luasnip",
       "j-hui/fidget.nvim",
+      "artemave/workspace-diagnostics.nvim",
     },
 
     config = function()
@@ -40,6 +41,14 @@ return {
           function(server_name)
             require("lspconfig")[server_name].setup({
               capabilities = cababilities,
+            })
+          end,
+          ["ts_ls"] = function()
+            require("lspconfig")["ts_ls"].setup({
+              capabilities = cababilities,
+              on_attach = function(client, bufnr)
+                require("workspace-diagnostics").populate_workspace_diagnostics(client, bufnr)
+              end,
             })
           end,
           ["tailwindcss"] = function()
