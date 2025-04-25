@@ -11,8 +11,9 @@ export GOPATH=$HOME/go
 export GIT_EDITOR=$VIM
 export N_PREFIX="$HOME/.local"
 export DOTFILES=$HOME/.dotfiles
-export TERMINAL="alacritty"
+export TERMINAL="ghostty"
 export EDITOR=$VIM
+export GRIM_DEFAULT_DIR=$HOME/screenshots
 
 addToPathFront $HOME/.local/.npm-global/bin
 addToPathFront $HOME/.local/scripts

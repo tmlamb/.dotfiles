@@ -101,8 +101,7 @@ function py {
 
 export USE_GKE_GCLOUD_AUTH_PLUGIN=True
 
-source /usr/share/doc/fzf/examples/key-bindings.zsh
-source /usr/share/doc/fzf/examples/completion.zsh
+source <(fzf --zsh)
 
 # The next line updates PATH for the Google Cloud SDK.
 if [ -f '/home/tom/google-cloud-sdk/path.zsh.inc' ]; then . '/home/tom/google-cloud-sdk/path.zsh.inc'; fi
