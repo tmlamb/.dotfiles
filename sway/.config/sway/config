@@ -217,17 +217,33 @@ set $wifi $(nmcli radio wifi | sed -e "s/enabled/on/" -e "s/disabled/off/")
 set $volu $(pactl get-sink-volume \@DEFAULT_SINK@ | grep -E -o 'right: .+ ([0-9]+)%' | grep -E -o '[0-9]+%' | head -1)
 set $micr $(pactl get-source-mute \@DEFAULT_SOURCE@ | grep -q 'no' && echo 'on' || echo 'off')
 set $batt $(cat /sys/class/power_supply/BAT1/capacity)
-set $date $(date +"%a %F %H:%M:%S")
-set $status wifi: [$wifi] vol: [$volu] mic: [$micr] bat: [$batt%] $date
+set $date $(date +"%F %H:%M:%S")
+set $blth $(bluetoothctl devices Connected | grep -E -o '\S+$')
+# load
+# ssd space
+set $status bt:$blth\|wifi:$wifi\|vol:"$volu"\|mic:$micr\|bat:$batt%\|$date
+
+set $status $date
+
+# if [ "$batt" -lt 60 ]; then
+#   status="$status|bat:$batt%"
+# fi
+
+# if [ -n "$blth" ]; then
+#   status="bt:$blth|$status"
+# fi
+# status="vol:\"$volu\"|mic:$micr|$status"
+
 
 bar {
     position bottom
-    status_command while echo $status; do sleep 1; done
+    status_command exec /home/tom/.config/sway/status.sh
+    # status_command while echo $status; do sleep 1; done
 #   status_command while date +'%Y-%m-%d %X'; do sleep 1; done
 
     colors {
         statusline #ffffff
-        background #323232
+        background #121212
         inactive_workspace #333333 #222222 #888888
     }
 }
