@@ -4,6 +4,9 @@
 #
 # Read `man 5 sway` for a complete reference.
 
+# allow screensharing?
+exec dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=sway
+
 ### Variables
 #
 # Logo key. Use Mod1 for Alt.
@@ -212,34 +215,9 @@ bindsym $mod+r mode "resize"
     bindsym XF86AudioNext exec playerctl next
     bindsym XF86AudioPrev exec playerctl previous
 
-# Status Bar:
-set $wifi $(nmcli radio wifi | sed -e "s/enabled/on/" -e "s/disabled/off/")
-set $volu $(pactl get-sink-volume \@DEFAULT_SINK@ | grep -E -o 'right: .+ ([0-9]+)%' | grep -E -o '[0-9]+%' | head -1)
-set $micr $(pactl get-source-mute \@DEFAULT_SOURCE@ | grep -q 'no' && echo 'on' || echo 'off')
-set $batt $(cat /sys/class/power_supply/BAT1/capacity)
-set $date $(date +"%F %H:%M:%S")
-set $blth $(bluetoothctl devices Connected | grep -E -o '\S+$')
-# load
-# ssd space
-set $status bt:$blth\|wifi:$wifi\|vol:"$volu"\|mic:$micr\|bat:$batt%\|$date
-
-set $status $date
-
-# if [ "$batt" -lt 60 ]; then
-#   status="$status|bat:$batt%"
-# fi
-
-# if [ -n "$blth" ]; then
-#   status="bt:$blth|$status"
-# fi
-# status="vol:\"$volu\"|mic:$micr|$status"
-
-
 bar {
     position bottom
     status_command exec /home/tom/.config/sway/status.sh
-    # status_command while echo $status; do sleep 1; done
-#   status_command while date +'%Y-%m-%d %X'; do sleep 1; done
 
     colors {
         statusline #ffffff
