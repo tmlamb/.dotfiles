@@ -47,9 +47,6 @@ exec swayidle -w \
 # resumed. It will also lock your screen before your computer goes to sleep.
 
 ### Input configuration
-#
-# Example configuration:
-#
 input "2362:628:PIXA3854:00_093A:0274_Touchpad" {
     dwt enabled
     tap enabled
