@@ -22,5 +22,6 @@ addToPathFront $HOME/.local/go/bin
 addToPathFront $HOME/go/bin
 addToPathFront $HOME/.pulumi/bin
 addToPathFront /usr/local/go/bin
+addToPathFront $HOME/tom/.opencode/bin
 
 bindkey -s ^f "tmux-sessionizer\n"
