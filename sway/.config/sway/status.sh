@@ -25,7 +25,11 @@ do
   drop=$(dropbox-cli status)
 
   if [[ $drop != "Up to date" ]]; then
-    echo -n "{\"name\":\"id_dropbox\",\"full_text\":\"DropBox:Syncing\",\"color\":\"#FFA500\"},"
+    if [[ $drop = "Dropbox isn't running!" ]]; then
+      echo -n "{\"name\":\"id_dropbox\",\"full_text\":\"DropBox:Off\",\"color\":\"#FF0000\"},"
+    else
+      echo -n "{\"name\":\"id_dropbox\",\"full_text\":\"DropBox:Unknown\",\"color\":\"#FFA500\"},"
+    fi
   fi
 
   charging=$(cat /sys/class/power_supply/BAT1/status)
