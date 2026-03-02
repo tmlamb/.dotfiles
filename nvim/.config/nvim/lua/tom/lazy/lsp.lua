@@ -1,10 +1,7 @@
 return {
   {
-    "neovim/nvim-lspconfig",
-    version = "*",
+    "williamboman/mason.nvim",
     dependencies = {
-      "williamboman/mason.nvim",
-      "williamboman/mason-lspconfig.nvim",
       "hrsh7th/cmp-nvim-lsp",
       "hrsh7th/cmp-buffer",
       "hrsh7th/cmp-path",
@@ -19,89 +16,45 @@ return {
     config = function()
       local cmp = require("cmp")
       local cmp_lsp = require("cmp_nvim_lsp")
-      local cababilities = vim.tbl_deep_extend(
+
+      -- Build capabilities once and apply to ALL servers via the '*' wildcard config
+      local capabilities = vim.tbl_deep_extend(
         "force",
         {},
         vim.lsp.protocol.make_client_capabilities(),
-        cmp_lsp.default_capabilities())
+        cmp_lsp.default_capabilities()
+      )
+      vim.lsp.config('*', { capabilities = capabilities })
+
+      -- Enable all servers (configs come from nvim/lsp/<name>.lua files)
+      vim.lsp.enable({
+        'ts_ls',
+        'eslint',
+        'lua_ls',
+        'rust_analyzer',
+        'cssls',
+        'tailwindcss',
+        'gopls',
+      })
+
+      -- Populate workspace-wide diagnostics when ts_ls attaches
+      vim.api.nvim_create_autocmd('LspAttach', {
+        callback = function(args)
+          local client = vim.lsp.get_client_by_id(args.data.client_id)
+          if client and client.name == 'ts_ls' then
+            require("workspace-diagnostics").populate_workspace_diagnostics(client, args.buf)
+          end
+        end,
+      })
 
       require("fidget").setup({})
       require("mason").setup()
-      require("mason-lspconfig").setup({
-        ensure_installed = {
-          "ts_ls",
-          "eslint",
-          "lua_ls",
-          "rust_analyzer",
-          "angularls",
-          "cssls",
-          "tailwindcss",
-          "gopls",
-        },
-        handlers = {
-          function(server_name)
-            require("lspconfig")[server_name].setup({
-              capabilities = cababilities,
-            })
-          end,
-          ["ts_ls"] = function()
-            require("lspconfig")["ts_ls"].setup({
-              capabilities = cababilities,
-              on_attach = function(client, bufnr)
-                require("workspace-diagnostics").populate_workspace_diagnostics(client, bufnr)
-              end,
-            })
-          end,
-          ["tailwindcss"] = function()
-            require("lspconfig")["tailwindcss"].setup({
-              settings = {
-                tailwindCSS = {
-                  experimental = {
-                    classRegex = {
-                      "tw`([^`]*)",
-                      "tw=\"([^\"]*)",
-                      "tw={\"([^\"}]*)",
-                      "tw\\.\\w+`([^`]*)",
-                      "tw\\(.*?\\)`([^`]*)",
-                      "tw.style\\(([^)]*)\\)",
-                    }
-                  }
-                }
-              }
-            })
-          end,
-          ["lua_ls"] = function()
-            require('lspconfig')['lua_ls'].setup({
-              capabilities = cababilities,
-              settings = {
-                Lua = {
-                  diagnostics = {
-                    globals = { 'vim' },
-                  },
-                },
-              },
-            })
-          end,
-          ["gopls"] = function()
-            require('lspconfig')['gopls'].setup({
-              capabilities = cababilities,
-              settings = {
-                gopls = {
-                  analyses = {
-                    unusedparams = true,
-                  },
-                  staticcheck = true,
-                },
-              },
-            })
-          end,
-        },
-      })
 
+      -- Prompt mason to install servers that aren't already present.
+      -- mason-lspconfig is no longer used; this list is just for reference.
+      -- Run :MasonInstall <name> or :Mason to manage servers manually.
 
-      --local has_cmp, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
-
-      local cmp_select = {behavior = cmp.SelectBehavior.Select}
+      local cmp_select = { behavior = cmp.SelectBehavior.Select }
 
       cmp.setup({
         snippet = {
@@ -119,11 +72,11 @@ return {
           { name = 'nvim_lsp' },
           { name = 'luasnip' },
         }, {
-            { name = 'buffer' },
-          })
+          { name = 'buffer' },
+        })
       })
 
-      -- Setup up vim-dadbod
+      -- vim-dadbod completion for SQL files
       cmp.setup.filetype({ "sql" }, {
         sources = {
           { name = "vim-dadbod-completion" },
@@ -145,4 +98,3 @@ return {
     end
   }
 }
-
