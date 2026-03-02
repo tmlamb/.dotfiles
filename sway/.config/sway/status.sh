@@ -37,7 +37,7 @@ do
   if [ "$batt" -lt 101 ]; then
     if [ "$charging" = "Charging" ]; then
       echo -n "{\"name\":\"id_battery\",\"full_text\":\"Bat:${batt}%\", \"color\":\"#96d294\"},"
-    elif [ "$batt" -lt 20 ]; then
+    elif [ "$batt" -lt 50 ]; then
       echo -n "{\"name\":\"id_battery\",\"full_text\":\"Bat:${batt}%\", \"color\":\"#FF0000\"},"
     else
       echo -n "{\"name\":\"id_battery\",\"full_text\":\"Bat:${batt}%\"},"
@@ -45,7 +45,7 @@ do
   fi
 
   if pactl get-source-mute \@DEFAULT_SOURCE@ | grep -q 'no' ; then
-    echo -n "{\"name\":\"id_microphone\",\"full_text\":\"Mic:On\"},"
+    echo -n "{\"name\":\"id_microphone\",\"full_text\":\"Mic:On\",\"color\":\"#FF0000\"},"
   fi
 
   ssidregex="wifi\s+connected\s+(\S+)"
@@ -61,19 +61,19 @@ do
   if pactl get-sink-mute \@DEFAULT_SINK@ | grep -q 'yes' ; then
     echo -n "{\"name\":\"id_volume\",\"full_text\":\"Vol:Mute\"},"
   else
-    echo -n "{\"name\":\"id_volume\",\"color\":\"#f7e594\",\"full_text\":\"Vol:$(pactl get-sink-volume \@DEFAULT_SINK@ | grep -E -o 'right: .+ ([0-9]+)%' | grep -E -o '[0-9]+%' | head -1)\"},"
+    echo -n "{\"name\":\"id_volume\",\"color\":\"#FFA500\",\"full_text\":\"Vol:$(pactl get-sink-volume \@DEFAULT_SINK@ | grep -E -o 'right: .+ ([0-9]+)%' | grep -E -o '[0-9]+%' | head -1)\"},"
   fi
 
-  load=$(w | awk -F'load average: ' '{print $2}' | cut -d',' -f1)
-  if (( $(echo "$load > 3" | bc -l) )); then
+  load=$(cut -d' ' -f1 /proc/loadavg)
+  if awk "BEGIN {exit !($load > 3)}"; then
     echo -n "{\"name\":\"id_load\",\"full_text\":\"Load:${load}\", \"color\":\"#FF0000\"},"
-  elif (( $(echo "$load > 1.5" | bc -l) )); then
+  elif awk "BEGIN {exit !($load > 1.5)}"; then
     echo -n "{\"name\":\"id_load\",\"full_text\":\"Load:${load}\", \"color\":\"#FFA500\"},"
   else
     echo -n "{\"name\":\"id_load\",\"full_text\":\"Load:${load}\"},"
   fi
 
-  echo -n "{\"name\":\"id_time\",\"full_text\":\"$(date +"%F %H:%M:%S")\"}"
+  echo -n "{\"name\":\"id_time\",\"full_text\":\"$(date +"%b %-d %H:%M:%S")\"}"
 
   echo -n "]"
   sleep 1
