@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+WORKSPACES="$HOME/workspaces"
+
+# Determine the project root (dir containing .bare)
+find_project_root() {
+    local dir="$1"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/.bare" ]]; then
+            echo "$dir"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+    return 1
+}
+
+project_root=$(find_project_root "$PWD")
+
+if [[ -z $project_root ]]; then
+    # Not inside a worktree — prompt user to pick a repo from workspaces
+    if [[ ! -d "$WORKSPACES" ]]; then
+        echo "Error: $WORKSPACES does not exist." >&2
+        exit 1
+    fi
+
+    project_root=$(find "$WORKSPACES" -mindepth 1 -maxdepth 1 -type d -exec test -d '{}/.bare' \; -print \
+        | fzf --prompt="repo> ")
+
+    if [[ -z $project_root ]]; then
+        exit 0
+    fi
+
+    if [[ ! -d "$project_root/.bare" ]]; then
+        echo "Error: '$project_root' is not a bare worktree repo (no .bare directory found)." >&2
+        exit 1
+    fi
+fi
+
+repo_name=$(basename "$project_root")
+
+# Prompt for branch name
+printf "branch name: "
+read -r branch_name
+if [[ -z $branch_name ]]; then
+    echo "Error: branch name cannot be empty." >&2
+    exit 1
+fi
+
+# Prompt for checkout vs new branch
+printf "  [1] checkout existing  [2] create new branch: "
+read -r -n 1 branch_mode
+printf "\n"
+if [[ "$branch_mode" == "2" ]]; then
+    new_branch=true
+elif [[ "$branch_mode" == "1" ]]; then
+    new_branch=false
+else
+    echo "Error: please enter 1 or 2." >&2
+    exit 1
+fi
+
+# Prompt for worktree directory name, defaulting to branch name (with slashes replaced)
+default_dir="${branch_name//\//-}"
+printf "worktree dir [%s]: " "$default_dir"
+read -r worktree_dir
+worktree_dir="${worktree_dir:-$default_dir}"
+
+worktree_path="$project_root/$worktree_dir"
+
+if [[ -d "$worktree_path" ]]; then
+    echo "Error: '$worktree_path' already exists." >&2
+    exit 1
+fi
+
+if [[ $new_branch == true ]]; then
+    git -C "$project_root" worktree add -b "$branch_name" "$worktree_path"
+else
+    git -C "$project_root" worktree add "$worktree_path" "$branch_name"
+fi
+exit_code=$?
+
+if [[ $exit_code -ne 0 ]]; then
+    echo "Error: 'git worktree add' failed with exit code $exit_code." >&2
+    exit $exit_code
+fi
+
+echo "Worktree created at $worktree_path"
+
+tmux-sessionizer "$worktree_path"

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+DEFAULT_ORG="tmlamb"
+WORKSPACES="$HOME/workspaces"
+
+org="${1:-$DEFAULT_ORG}"
+
+# Fetch all repos from the GitHub API (paginated)
+fetch_repos() {
+    local page=1
+    while true; do
+        local result
+        result=$(curl -sf "https://api.github.com/users/$org/repos?per_page=100&page=$page")
+        local names
+        names=$(echo "$result" | python3 -c "import sys,json; repos=json.load(sys.stdin); [print(r['name']) for r in repos]")
+        echo "$names"
+        local count
+        count=$(echo "$names" | grep -c . || true)
+        [[ $count -lt 100 ]] && break
+        (( page++ ))
+    done
+}
+
+repo=$(fetch_repos | fzf --prompt="$org/ ")
+
+if [[ -z $repo ]]; then
+    exit 0
+fi
+
+repo_dir="$WORKSPACES/$repo"
+bare_dir="$repo_dir/.bare"
+git_file="$repo_dir/.git"
+
+# Skip setup if the main worktree already exists
+if [[ -d "$repo_dir/main" ]]; then
+    echo "Worktree already exists at $repo_dir/main"
+    exit 0
+fi
+
+mkdir -p "$repo_dir"
+
+# Clone bare repo
+echo "Cloning $org/$repo as bare repo..."
+git clone --bare "git@github.com:$org/$repo.git" "$bare_dir"
+
+# Write .git pointer so git commands work from the project root
+echo "gitdir: ./.bare" > "$git_file"
+
+# Configure remote fetch so remote-tracking branches are visible
+git -C "$bare_dir" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+
+# Fetch and add main worktree
+echo "Setting up main worktree..."
+git -C "$repo_dir" fetch
+
+# Determine default branch (main or master)
+default_branch=$(git -C "$bare_dir" symbolic-ref --short HEAD 2>/dev/null || echo "main")
+
+git -C "$repo_dir" worktree add "$default_branch" "$default_branch"
+
+echo "Done. Worktree ready at $repo_dir/$default_branch"
+
+tmux-sessionizer "$repo_dir/$default_branch"

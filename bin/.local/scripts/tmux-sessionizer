@@ -3,7 +3,7 @@
 if [[ $# -eq 1 ]]; then
     selected=$1
 else
-    selected=$(find ~/ ~/personal ~/work ~/.dotfiles -mindepth 1 -maxdepth 1 -type d | fzf)
+    selected=$(find ~/ ~/personal ~/work ~/workspaces ~/.dotfiles -mindepth 1 -maxdepth 1 -type d | fzf)
 fi
 
 if [[ -z $selected ]]; then
@@ -18,12 +18,16 @@ if [[ -d "$selected/.bare" ]]; then
         | awk '{print $2}' \
         | grep -v "/.bare$")
 
-    if [[ ${#worktrees[@]} -eq 1 ]]; then
-        selected="${worktrees[0]}"
-    elif [[ ${#worktrees[@]} -gt 1 ]]; then
-        selected=$(printf '%s\n' "${worktrees[@]}" | fzf --prompt="worktree> ")
-        if [[ -z $selected ]]; then
+    if [[ ${#worktrees[@]} -ge 1 ]]; then
+        project_root=$(dirname "${worktrees[0]}")
+        choice=$( { echo "/"; printf '%s\n' "${worktrees[@]##*/}"; } \
+            | fzf --prompt="worktree> ")
+        if [[ -z $choice ]]; then
             exit 0
+        elif [[ $choice == "/" ]]; then
+            selected="$project_root"
+        else
+            selected="$project_root/$choice"
         fi
     fi
 fi
@@ -39,13 +43,29 @@ fi
 
 tmux_running=$(pgrep tmux)
 
+is_worktree=false
+if [[ -d "$(dirname "$selected")/.bare" ]] && [[ "$selected" != "$(dirname "$selected")" ]]; then
+    is_worktree=true
+fi
+
+setup_windows() {
+    tmux send-keys -t "$selected_name:1" "vim ." Enter
+    tmux neww -dt "$selected_name" -c "$selected"
+    tmux send-keys -t "$selected_name:2" "opencode ." Enter
+    tmux neww -dt "$selected_name" -c "$selected"
+    tmux select-window -t "$selected_name:3"
+}
+
 if [[ -z $TMUX ]] && [[ -z $tmux_running ]]; then
-    tmux new-session -s "$selected_name" -c "$selected"
+    tmux new-session -ds "$selected_name" -c "$selected"
+    [[ $is_worktree == true ]] && setup_windows
+    tmux attach-session -t "$selected_name"
     exit 0
 fi
 
 if ! tmux has-session -t="$selected_name" 2> /dev/null; then
     tmux new-session -ds "$selected_name" -c "$selected"
+    [[ $is_worktree == true ]] && setup_windows
 fi
 
 tmux switch-client -t "$selected_name"
