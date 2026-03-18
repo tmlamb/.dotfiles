@@ -103,7 +103,7 @@ return {
       return {}
     end,
     ['eslint/noLibrary'] = function()
-      vim.notify('[lsp/eslint] Unable to find ESLint library.', vim.log.levels.WARN)
+      vim.notify('[lsp/eslint] Unable to find ESLint library. Maybe run `npm i`?', vim.log.levels.WARN)
       return {}
     end,
   },

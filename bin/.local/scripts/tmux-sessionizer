@@ -10,16 +10,42 @@ if [[ -z $selected ]]; then
     exit 0
 fi
 
-selected_name=$(basename "$selected" | tr . _)
+# If the selected dir is a bare-worktree project (contains a .bare subdir),
+# always show all worktrees for selection.
+if [[ -d "$selected/.bare" ]]; then
+    mapfile -t worktrees < <(git -C "$selected/.bare" worktree list --porcelain \
+        | grep "^worktree " \
+        | awk '{print $2}' \
+        | grep -v "/.bare$")
+
+    if [[ ${#worktrees[@]} -eq 1 ]]; then
+        selected="${worktrees[0]}"
+    elif [[ ${#worktrees[@]} -gt 1 ]]; then
+        selected=$(printf '%s\n' "${worktrees[@]}" | fzf --prompt="worktree> ")
+        if [[ -z $selected ]]; then
+            exit 0
+        fi
+    fi
+fi
+
+# Build session name: for worktrees use <project>-<worktree>, else just basename
+parent=$(basename "$(dirname "$selected")")
+base=$(basename "$selected" | tr . _)
+if [[ -d "$(dirname "$selected")/.bare" ]]; then
+    selected_name="${parent}-${base}"
+else
+    selected_name="$base"
+fi
+
 tmux_running=$(pgrep tmux)
 
 if [[ -z $TMUX ]] && [[ -z $tmux_running ]]; then
-    tmux new-session -s $selected_name -c $selected
+    tmux new-session -s "$selected_name" -c "$selected"
     exit 0
 fi
 
-if ! tmux has-session -t=$selected_name 2> /dev/null; then
-    tmux new-session -ds $selected_name -c $selected
+if ! tmux has-session -t="$selected_name" 2> /dev/null; then
+    tmux new-session -ds "$selected_name" -c "$selected"
 fi
 
-tmux switch-client -t $selected_name
+tmux switch-client -t "$selected_name"
