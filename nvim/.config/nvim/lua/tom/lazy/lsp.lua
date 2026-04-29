@@ -10,7 +10,7 @@ return {
       "L3MON4D3/LuaSnip",
       "saadparwaiz1/cmp_luasnip",
       "j-hui/fidget.nvim",
-      "artemave/workspace-diagnostics.nvim",
+      -- "artemave/workspace-diagnostics.nvim",
     },
 
     config = function()
@@ -38,14 +38,14 @@ return {
       })
 
       -- Populate workspace-wide diagnostics when ts_ls attaches
-      vim.api.nvim_create_autocmd('LspAttach', {
-        callback = function(args)
-          local client = vim.lsp.get_client_by_id(args.data.client_id)
-          if client and client.name == 'ts_ls' then
-            require("workspace-diagnostics").populate_workspace_diagnostics(client, args.buf)
-          end
-        end,
-      })
+      -- vim.api.nvim_create_autocmd('LspAttach', {
+      --   callback = function(args)
+      --     local client = vim.lsp.get_client_by_id(args.data.client_id)
+      --     if client and client.name == 'ts_ls' then
+      --       require("workspace-diagnostics").populate_workspace_diagnostics(client, args.buf)
+      --     end
+      --   end,
+      -- })
 
       require("fidget").setup({})
       require("mason").setup()

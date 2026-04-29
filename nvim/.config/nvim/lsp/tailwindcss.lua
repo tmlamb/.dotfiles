@@ -6,6 +6,8 @@ return {
     tailwindCSS = {
       experimental = {
         classRegex = {
+          'contentContainerClassName\\s*=\\s*["\']([^"\']*)["\']',
+          'contentContainerClassName\\s*=\\s*{\\s*["\']([^"\']*)["\']\\s*}',
           "tw`([^`]*)",
           "tw=\"([^\"]*)",
           "tw={\"([^\"}]*)",
