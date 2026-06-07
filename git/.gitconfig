@@ -1,0 +1,7 @@
+[user]
+	email = tmlamb@gmail.com
+	name = Tom Lamb
+[core]
+	pager = less -FRX
+[push]
+	autoSetupRemote = true

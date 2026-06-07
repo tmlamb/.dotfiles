@@ -1,0 +1,728 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+WORKSPACES="$HOME/workspaces"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+TMUX_SESSIONIZER="$SCRIPT_DIR/tmux-sessionizer-v2"
+
+fzf_key=""
+fzf_value=""
+
+die() {
+    printf 'dir-contextizer: %s\n' "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+ensure_dependencies() {
+    require_command fzf
+    require_command git
+    require_command jq
+    require_command tmux
+}
+
+open_context_session() {
+    local context_dir="$1"
+
+    if [[ -x "$TMUX_SESSIONIZER" ]]; then
+        "$TMUX_SESSIONIZER" "$context_dir"
+    else
+        tmux-sessionizer-v2 "$context_dir"
+    fi
+}
+
+parse_fzf_output() {
+    local output="$1"
+    shift
+    local first="${output%%$'\n'*}"
+
+    fzf_key=""
+    fzf_value="$output"
+
+    local expected
+    for expected in "$@"; do
+        if [[ "$first" == "$expected" ]]; then
+            fzf_key="$first"
+            if [[ "$output" == *$'\n'* ]]; then
+                fzf_value="${output#*$'\n'}"
+            else
+                fzf_value=""
+            fi
+            return 0
+        fi
+    done
+
+    if [[ -z "$first" && "$output" == *$'\n'* ]]; then
+        fzf_value="${output#*$'\n'}"
+    fi
+}
+
+prompt_with_default() {
+    local prompt="$1"
+    local default="$2"
+    local value
+
+    printf '%s [%s]: ' "$prompt" "$default" >&2
+    read -r value </dev/tty || return 1
+    printf '%s\n' "${value:-$default}"
+}
+
+prompt_required() {
+    local prompt="$1"
+    local value
+
+    while true; do
+        printf '%s: ' "$prompt" >&2
+        read -r value </dev/tty || return 1
+        [[ -n "$value" ]] && {
+            printf '%s\n' "$value"
+            return 0
+        }
+        printf 'Value cannot be empty.\n' >&2
+    done
+}
+
+is_plain_dir_name() {
+    local name="$1"
+    [[ -n "$name" && "$name" != "." && "$name" != ".." && "$name" != */* ]]
+}
+
+prompt_unique_child_dir() {
+    local parent="$1"
+    local default="$2"
+    local prompt="$3"
+    local name path
+
+    while true; do
+        name=$(prompt_with_default "$prompt" "$default") || return 1
+        is_plain_dir_name "$name" || {
+            printf 'Use a plain directory name without slashes.\n' >&2
+            continue
+        }
+
+        path="$parent/$name"
+        if [[ -e "$path" ]]; then
+            printf '%s already exists. Choose a different name.\n' "$path" >&2
+            continue
+        fi
+
+        printf '%s\n' "$name"
+        return 0
+    done
+}
+
+prompt_unique_child_dir_required() {
+    local parent="$1"
+    local prompt="$2"
+    local name path
+
+    while true; do
+        name=$(prompt_required "$prompt") || return 1
+        is_plain_dir_name "$name" || {
+            printf 'Use a plain directory name without slashes.\n' >&2
+            continue
+        }
+
+        path="$parent/$name"
+        if [[ -e "$path" ]]; then
+            printf '%s already exists. Choose a different name.\n' "$path" >&2
+            continue
+        fi
+
+        printf '%s\n' "$name"
+        return 0
+    done
+}
+
+prompt_worktree_path_for_branch() {
+    local repo_root="$1"
+    local branch="$2"
+    local default="$3"
+    local name path existing_branch
+
+    while true; do
+        name=$(prompt_with_default 'worktree dir' "$default") || return 1
+        is_plain_dir_name "$name" || {
+            printf 'Use a plain directory name without slashes.\n' >&2
+            continue
+        }
+
+        path="$repo_root/$name"
+        if [[ ! -e "$path" ]]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+
+        if is_git_worktree "$path"; then
+            existing_branch=$(branch_for_worktree "$path")
+            if [[ "$existing_branch" == "$branch" ]]; then
+                printf '%s\n' "$path"
+                return 0
+            fi
+
+            printf '%s already exists as a worktree for branch "%s". Choose a different name.\n' "$path" "${existing_branch:-unknown}" >&2
+            continue
+        fi
+
+        printf '%s already exists but is not a git worktree. Choose a different name.\n' "$path" >&2
+    done
+}
+
+find_context_root() {
+    local dir="$1"
+
+    while [[ "$dir" != "/" && -n "$dir" ]]; do
+        if [[ -f "$dir/.contextizer" ]]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+
+    return 1
+}
+
+repo_alias() {
+    basename "$1"
+}
+
+branch_for_worktree() {
+    local worktree_dir="$1"
+    local branch
+
+    branch=$(git -C "$worktree_dir" branch --show-current 2>/dev/null || true)
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    branch=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    [[ "$branch" == "HEAD" ]] && branch=""
+    printf '%s\n' "$branch"
+}
+
+is_git_worktree() {
+    [[ -d "$1" ]] && git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+list_repo_roots() {
+    local repo_root
+
+    [[ -d "$WORKSPACES" ]] || return 0
+
+    for repo_root in "$WORKSPACES"/*; do
+        [[ -d "$repo_root/.bare" ]] || continue
+        printf '%s\t%s\n' "$(repo_alias "$repo_root")" "$repo_root"
+    done | sort -u
+}
+
+list_worktrees() {
+    local repo_root="$1"
+    local bare_dir="$repo_root/.bare"
+
+    git -C "$bare_dir" worktree list --porcelain | {
+        local line path branch
+
+        while IFS= read -r line; do
+            case "$line" in
+                worktree\ *)
+                    path="${line#worktree }"
+                    branch=""
+                    ;;
+                branch\ *)
+                    branch="${line#branch }"
+                    branch="${branch#refs/heads/}"
+                    ;;
+                "")
+                    if [[ -n "${path:-}" && "$path" != "$bare_dir" ]]; then
+                        printf '%s\t%s\t%s\n' "$(basename "$path")" "$path" "${branch:-}"
+                    fi
+                    path=""
+                    branch=""
+                    ;;
+            esac
+        done
+
+        if [[ -n "${path:-}" && "$path" != "$bare_dir" ]]; then
+            printf '%s\t%s\t%s\n' "$(basename "$path")" "$path" "${branch:-}"
+        fi
+    } | sort -u
+}
+
+list_branches() {
+    local repo_root="$1"
+
+    git -C "$repo_root" for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin 2>/dev/null \
+        | sed 's#^origin/##' \
+        | sed '/^HEAD$/d' \
+        | sort -u
+}
+
+list_branches_with_worktrees() {
+    local repo_root="$1"
+    local branch worktree_path label
+
+    while IFS= read -r branch; do
+        [[ -n "$branch" ]] || continue
+        worktree_path=$(worktree_for_branch "$repo_root" "$branch" | head -n 1)
+        if [[ -n "$worktree_path" ]]; then
+            label="has worktree"
+        else
+            label=""
+        fi
+        printf '%s\t%s\t%s\n' "$branch" "$label" "$worktree_path"
+    done < <(list_branches "$repo_root")
+}
+
+get_default_branch() {
+    local repo_root="$1"
+    local bare_dir="$repo_root/.bare"
+    local branch
+
+    branch=$(git -C "$bare_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    branch="${branch#refs/heads/}"
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    branch=$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+    branch="${branch#origin/}"
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    branch=$(git -C "$repo_root" branch -r --format='%(refname:short)' 2>/dev/null | sed 's#^origin/##' | sed '/^HEAD$/d' | sort -u | head -n 1)
+    [[ -n "$branch" ]] || return 1
+    printf '%s\n' "$branch"
+}
+
+resolve_branch_ref() {
+    local repo_root="$1"
+    local branch="$2"
+
+    if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+        printf '%s\n' "$branch"
+    elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        printf '%s\n' "origin/$branch"
+    else
+        printf '%s\n' "$branch"
+    fi
+}
+
+worktree_for_branch() {
+    local repo_root="$1"
+    local wanted_branch="$2"
+    local bare_dir="$repo_root/.bare"
+
+    git -C "$bare_dir" worktree list --porcelain | {
+        local line path branch
+
+        while IFS= read -r line; do
+            case "$line" in
+                worktree\ *)
+                    path="${line#worktree }"
+                    branch=""
+                    ;;
+                branch\ *)
+                    branch="${line#branch }"
+                    branch="${branch#refs/heads/}"
+                    ;;
+                "")
+                    if [[ -n "${path:-}" && "$path" != "$bare_dir" && "$branch" == "$wanted_branch" ]]; then
+                        printf '%s\n' "$path"
+                    fi
+                    path=""
+                    branch=""
+                    ;;
+            esac
+        done
+
+        if [[ -n "${path:-}" && "$path" != "$bare_dir" && "$branch" == "$wanted_branch" ]]; then
+            printf '%s\n' "$path"
+        fi
+    }
+}
+
+create_worktree_from_existing_branch() {
+    local repo_root="$1"
+    local branch="$2"
+    local worktree_dir="$3"
+    local existing_worktree
+
+    existing_worktree=$(worktree_for_branch "$repo_root" "$branch" | head -n 1)
+    if [[ -n "$existing_worktree" ]]; then
+        printf '%s\n' "$existing_worktree"
+        return 0
+    fi
+
+    if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+        git -C "$repo_root" worktree add "$worktree_dir" "$branch" >&2 \
+            || die "failed to add worktree for branch: $branch"
+    elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        git -C "$repo_root" worktree add --track -b "$branch" "$worktree_dir" "origin/$branch" >&2 \
+            || die "failed to add tracking worktree for branch: $branch"
+    else
+        die "branch not found: $branch"
+    fi
+
+    printf '%s\n' "$worktree_dir"
+}
+
+create_new_branch_worktree() {
+    local repo_root="$1"
+    local branch="$2"
+    local worktree_dir="$3"
+    local default_branch branch_ref existing_worktree
+
+    existing_worktree=$(worktree_for_branch "$repo_root" "$branch" | head -n 1)
+    if [[ -n "$existing_worktree" ]]; then
+        printf '%s\n' "$existing_worktree"
+        return 0
+    fi
+
+    if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch" \
+        || git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        create_worktree_from_existing_branch "$repo_root" "$branch" "$worktree_dir"
+        return 0
+    fi
+
+    default_branch=$(get_default_branch "$repo_root") || die "failed to determine default branch for $(repo_alias "$repo_root")"
+    branch_ref=$(resolve_branch_ref "$repo_root" "$default_branch")
+
+    git -C "$repo_root" worktree add -b "$branch" "$worktree_dir" "$branch_ref" >&2 \
+        || die "failed to create worktree for new branch: $branch"
+
+    printf '%s\n' "$worktree_dir"
+}
+
+choose_branch_for_repo() {
+    local repo_root="$1"
+    local context_name="$2"
+    local output branch existing_worktree worktree_path default_dir status
+
+    output=$(list_branches_with_worktrees "$repo_root" | fzf \
+        --prompt="$(repo_alias "$repo_root") branch> " \
+        --delimiter=$'\t' \
+        --with-nth=1,2,3 \
+        --expect=ctrl-n \
+        --header='ctrl-n: create branch' || true)
+
+    [[ -n "$output" ]] || return 1
+    parse_fzf_output "$output" ctrl-n
+
+    if [[ "$fzf_key" == ctrl-n ]]; then
+        branch=$(prompt_with_default 'new branch name' "$context_name") || return 1
+        [[ -n "$branch" ]] || return 1
+        existing_worktree=$(worktree_for_branch "$repo_root" "$branch" | head -n 1)
+        if [[ -n "$existing_worktree" ]]; then
+            worktree_path="$existing_worktree"
+        else
+            worktree_path=$(prompt_worktree_path_for_branch "$repo_root" "$branch" "$context_name") || return 1
+            worktree_path=$(create_new_branch_worktree "$repo_root" "$branch" "$worktree_path")
+            status=$?
+            [[ $status -eq 0 ]] || return "$status"
+        fi
+    else
+        branch=$(printf '%s\n' "$fzf_value" | cut -f1)
+        worktree_path=$(printf '%s\n' "$fzf_value" | cut -f3)
+        [[ -n "$branch" ]] || return 1
+
+        if [[ -z "$worktree_path" ]]; then
+            default_dir="${branch//\//-}"
+            worktree_path=$(prompt_worktree_path_for_branch "$repo_root" "$branch" "$default_dir") || return 1
+            worktree_path=$(create_worktree_from_existing_branch "$repo_root" "$branch" "$worktree_path")
+            status=$?
+            [[ $status -eq 0 ]] || return "$status"
+        fi
+    fi
+
+    printf '%s\t%s\t%s\n' "$repo_root" "$worktree_path" "$branch"
+}
+
+choose_worktree_for_repo() {
+    local repo_root="$1"
+    local context_name="$2"
+    local auto_context_worktree="$3"
+    local context_worktree="$repo_root/$context_name"
+    local output branch worktree_path
+
+    if [[ "$auto_context_worktree" == true && -d "$context_worktree" ]]; then
+        if is_git_worktree "$context_worktree"; then
+            branch=$(branch_for_worktree "$context_worktree")
+            branch="${branch:-$context_name}"
+            printf '%s\t%s\t%s\n' "$repo_root" "$context_worktree" "$branch"
+            return 0
+        fi
+        printf 'Found %s, but it is not a valid git worktree. Choose manually.\n' "$context_worktree" >&2
+    fi
+
+    output=$(list_worktrees "$repo_root" | fzf \
+        --prompt="$(repo_alias "$repo_root") worktree> " \
+        --delimiter=$'\t' \
+        --with-nth=1,3 \
+        --expect=ctrl-n \
+        --header='ctrl-n: add branch to worktree' || true)
+
+    [[ -n "$output" ]] || return 1
+    parse_fzf_output "$output" ctrl-n
+
+    if [[ "$fzf_key" == ctrl-n ]]; then
+        choose_branch_for_repo "$repo_root" "$context_name"
+        return $?
+    fi
+
+    worktree_path=$(printf '%s\n' "$fzf_value" | cut -f2)
+    branch=$(printf '%s\n' "$fzf_value" | cut -f3)
+    [[ -n "$worktree_path" ]] || return 1
+    branch="${branch:-$(branch_for_worktree "$worktree_path")}"
+    branch="${branch:-$(basename "$worktree_path")}"
+
+    printf '%s\t%s\t%s\n' "$repo_root" "$worktree_path" "$branch"
+}
+
+write_contextizer_from_tsv() {
+    local context_dir="$1"
+    local context_name="$2"
+    local tsv_file="$3"
+    local tmp_file="$context_dir/.contextizer.tmp"
+
+    jq -Rn --arg name "$context_name" '
+        [inputs | select(length > 0) | split("\t") | {
+            repo_root: .[0],
+            worktree_dir: .[1],
+            branch: .[2]
+        }] as $repos |
+        {version: 1, name: $name, repos: $repos}
+    ' <"$tsv_file" >"$tmp_file" || die "failed to write context metadata"
+
+    mv "$tmp_file" "$context_dir/.contextizer" || die "failed to update .contextizer"
+}
+
+regenerate_context_files() {
+    local context_dir="$1"
+    local context_file="$context_dir/.contextizer"
+    local opencode_config="$context_dir/.opencode-context.json"
+    local opencode_tmp="$context_dir/.opencode-context.json.tmp"
+    local context_md="$context_dir/CONTEXT.md"
+    local context_md_tmp="$context_dir/CONTEXT.md.tmp"
+
+    jq -e '.version == 1 and (.name | type == "string") and (.repos | type == "array")' "$context_file" >/dev/null \
+        || die "invalid context metadata: $context_file"
+
+    jq '{
+        "$schema": "https://opencode.ai/config.json",
+        instructions: ["./CONTEXT.md"],
+        reference: (reduce .repos[] as $repo ({}; . + {
+            ($repo.repo_root | split("/") | last): {path: $repo.worktree_dir}
+        })),
+        permission: {
+            external_directory: (reduce .repos[] as $repo ({}; . + {
+                ($repo.worktree_dir + "/**"): "allow"
+            }))
+        }
+    }' "$context_file" >"$opencode_tmp" || die "failed to generate opencode context config"
+    mv "$opencode_tmp" "$opencode_config" || die "failed to update opencode context config"
+
+    {
+        printf '# Context: %s\n\n' "$(jq -r '.name' "$context_file")"
+        printf 'This directory represents a cross-repo feature context. The repositories below should be treated as the active working set for this context.\n\n'
+        jq -r '.repos[] |
+            "## " + (.repo_root | split("/") | last) + "\n\n" +
+            "- OpenCode reference: `@" + (.repo_root | split("/") | last) + "`\n" +
+            "- Branch: `" + .branch + "`\n" +
+            "- Repo root: `" + .repo_root + "`\n" +
+            "- Worktree: `" + .worktree_dir + "`\n"
+        ' "$context_file"
+    } >"$context_md_tmp" || die "failed to generate CONTEXT.md"
+    mv "$context_md_tmp" "$context_md" || die "failed to update CONTEXT.md"
+}
+
+context_repos_tsv() {
+    local context_dir="$1"
+
+    jq -r '.repos[] | [.repo_root, .worktree_dir, .branch] | @tsv' "$context_dir/.contextizer"
+}
+
+add_vim_tmux_window() {
+    local repo_root="$1"
+    local worktree_dir="$2"
+    local session_name window_id
+
+    [[ -n "${TMUX:-}" ]] || return 0
+    [[ -d "$worktree_dir" ]] || return 0
+
+    session_name=$(tmux display-message -p '#S') || return 0
+    window_id=$(tmux new-window -d -P -F '#{window_id}' -t "$session_name" -n "$(repo_alias "$repo_root")" -c "$worktree_dir") \
+        || die "failed to add tmux window for $(repo_alias "$repo_root")"
+    tmux send-keys -t "$window_id" "vim ." Enter
+}
+
+select_repo_root() {
+    local exclude_context_dir="${1:-}"
+    local output
+
+    if [[ -n "$exclude_context_dir" ]]; then
+        output=$(list_repo_roots | while IFS=$'\t' read -r alias repo_root; do
+            if ! jq -e --arg repo_root "$repo_root" '.repos[]? | select(.repo_root == $repo_root)' "$exclude_context_dir/.contextizer" >/dev/null; then
+                printf '%s\t%s\n' "$alias" "$repo_root"
+            fi
+        done | fzf --prompt='repo> ' --delimiter=$'\t' --with-nth=1 || true)
+    else
+        output=$(list_repo_roots | fzf --prompt='repo> ' --delimiter=$'\t' --with-nth=1 || true)
+    fi
+
+    [[ -n "$output" ]] || return 1
+    printf '%s\n' "$output" | cut -f2
+}
+
+select_repo_roots_multi() {
+    list_repo_roots | fzf --multi --prompt='repos> ' --delimiter=$'\t' --with-nth=1 --header='tab: select' || true
+}
+
+create_context_flow() {
+    local context_name context_dir selected_repos tmp_tsv repo_root repo_selection selection status
+
+    mkdir -p "$WORKSPACES" || die "failed to create workspaces directory: $WORKSPACES"
+    context_name=$(prompt_unique_child_dir_required "$WORKSPACES" 'context directory') || exit 0
+    context_dir="$WORKSPACES/$context_name"
+
+    selected_repos=$(select_repo_roots_multi)
+    [[ -n "$selected_repos" ]] || exit 0
+
+    mkdir -p "$context_dir" || die "failed to create context directory: $context_dir"
+    tmp_tsv=$(mktemp "$context_dir/.contextizer.repos.XXXXXX") || die "failed to create temporary context file"
+
+    while IFS= read -r repo_selection; do
+        [[ -n "$repo_selection" ]] || continue
+        repo_root=$(printf '%s\n' "$repo_selection" | cut -f2)
+        [[ -n "$repo_root" ]] || continue
+
+        selection=$(choose_worktree_for_repo "$repo_root" "$context_name" true)
+        status=$?
+        if [[ $status -ne 0 || -z "$selection" ]]; then
+            printf 'Skipping %s.\n' "$(repo_alias "$repo_root")" >&2
+            continue
+        fi
+        printf '%s\n' "$selection" >>"$tmp_tsv"
+    done <<<"$selected_repos"
+
+    if [[ ! -s "$tmp_tsv" ]]; then
+        rm -f "$tmp_tsv"
+        rmdir "$context_dir" 2>/dev/null || true
+        die "no repositories selected for context"
+    fi
+
+    write_contextizer_from_tsv "$context_dir" "$context_name" "$tmp_tsv"
+    rm -f "$tmp_tsv"
+    regenerate_context_files "$context_dir"
+
+    printf 'Context created at %s\n' "$context_dir" >&2
+    open_context_session "$context_dir"
+}
+
+add_repo_flow() {
+    local context_dir="$1"
+    local context_name repo_root selection status tmp_tsv
+
+    context_name=$(jq -r '.name' "$context_dir/.contextizer")
+    repo_root=$(select_repo_root "$context_dir") || exit 0
+
+    selection=$(choose_worktree_for_repo "$repo_root" "$context_name" true)
+    status=$?
+    [[ $status -eq 0 && -n "$selection" ]] || exit 0
+
+    tmp_tsv=$(mktemp "$context_dir/.contextizer.repos.XXXXXX") || die "failed to create temporary context file"
+    context_repos_tsv "$context_dir" >"$tmp_tsv"
+    printf '%s\n' "$selection" >>"$tmp_tsv"
+    write_contextizer_from_tsv "$context_dir" "$context_name" "$tmp_tsv"
+    rm -f "$tmp_tsv"
+    regenerate_context_files "$context_dir"
+
+    add_vim_tmux_window "$(printf '%s\n' "$selection" | cut -f1)" "$(printf '%s\n' "$selection" | cut -f2)"
+}
+
+remove_repo_flow() {
+    local context_dir="$1"
+    local output repo_root tmp_file
+
+    output=$(jq -r '.repos[] | [(.repo_root | split("/") | last), .branch, .repo_root] | @tsv' "$context_dir/.contextizer" \
+        | fzf --prompt='remove repo> ' --delimiter=$'\t' --with-nth=1,2 || true)
+    [[ -n "$output" ]] || exit 0
+
+    repo_root=$(printf '%s\n' "$output" | cut -f3)
+    tmp_file="$context_dir/.contextizer.tmp"
+    jq --arg repo_root "$repo_root" 'del(.repos[] | select(.repo_root == $repo_root))' "$context_dir/.contextizer" >"$tmp_file" \
+        || die "failed to remove repo from context"
+    mv "$tmp_file" "$context_dir/.contextizer" || die "failed to update .contextizer"
+    regenerate_context_files "$context_dir"
+}
+
+change_branch_flow() {
+    local context_dir="$1"
+    local context_name output repo_root selection status tmp_file
+
+    context_name=$(jq -r '.name' "$context_dir/.contextizer")
+    output=$(jq -r '.repos[] | [(.repo_root | split("/") | last), .branch, .repo_root] | @tsv' "$context_dir/.contextizer" \
+        | fzf --prompt='change repo> ' --delimiter=$'\t' --with-nth=1,2 || true)
+    [[ -n "$output" ]] || exit 0
+
+    repo_root=$(printf '%s\n' "$output" | cut -f3)
+    selection=$(choose_worktree_for_repo "$repo_root" "$context_name" false)
+    status=$?
+    [[ $status -eq 0 && -n "$selection" ]] || exit 0
+
+    tmp_file="$context_dir/.contextizer.tmp"
+    jq \
+        --arg repo_root "$(printf '%s\n' "$selection" | cut -f1)" \
+        --arg worktree_dir "$(printf '%s\n' "$selection" | cut -f2)" \
+        --arg branch "$(printf '%s\n' "$selection" | cut -f3)" \
+        '(.repos[] | select(.repo_root == $repo_root)) |= (.worktree_dir = $worktree_dir | .branch = $branch)' \
+        "$context_dir/.contextizer" >"$tmp_file" || die "failed to update repo branch in context"
+    mv "$tmp_file" "$context_dir/.contextizer" || die "failed to update .contextizer"
+    regenerate_context_files "$context_dir"
+}
+
+manage_context_flow() {
+    local context_dir="$1"
+    local action
+
+    jq -e '.version == 1 and (.repos | type == "array")' "$context_dir/.contextizer" >/dev/null \
+        || die "invalid context metadata: $context_dir/.contextizer"
+
+    action=$(printf '%s\n' 'add repo' 'remove repo' 'change branch' | fzf --prompt='context> ' || true)
+    case "$action" in
+        'add repo')
+            add_repo_flow "$context_dir"
+            ;;
+        'remove repo')
+            remove_repo_flow "$context_dir"
+            ;;
+        'change branch')
+            change_branch_flow "$context_dir"
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+}
+
+main() {
+    local context_root
+
+    ensure_dependencies
+    context_root=$(find_context_root "$PWD" 2>/dev/null || true)
+
+    if [[ -n "$context_root" ]]; then
+        manage_context_flow "$context_root"
+    else
+        create_context_flow
+    fi
+}
+
+main "$@"

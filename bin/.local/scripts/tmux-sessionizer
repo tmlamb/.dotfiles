@@ -1,71 +1,654 @@
 #!/usr/bin/env bash
 
-if [[ $# -eq 1 ]]; then
-    selected=$1
-else
-    selected=$(find ~/ ~/personal ~/work ~/workspaces ~/.dotfiles -mindepth 1 -maxdepth 1 -type d | fzf)
-fi
+set -uo pipefail
 
-if [[ -z $selected ]]; then
-    exit 0
-fi
+WORKSPACES="$HOME/workspaces"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-sessionizer-v2"
+REPO_CACHE="$CACHE_DIR/repos.json"
 
-# If the selected dir is a bare-worktree project (contains a .bare subdir),
-# always show all worktrees for selection.
-if [[ -d "$selected/.bare" ]]; then
-    mapfile -t worktrees < <(git -C "$selected/.bare" worktree list --porcelain \
-        | grep "^worktree " \
-        | awk '{print $2}' \
-        | grep -v "/.bare$")
+fzf_key=""
+fzf_value=""
 
-    if [[ ${#worktrees[@]} -ge 1 ]]; then
-        project_root=$(dirname "${worktrees[0]}")
-        choice=$( { echo "/"; printf '%s\n' "${worktrees[@]##*/}"; } \
-            | fzf --prompt="worktree> ")
-        if [[ -z $choice ]]; then
-            exit 0
-        elif [[ $choice == "/" ]]; then
-            selected="$project_root"
-        else
-            selected="$project_root/$choice"
-        fi
-    fi
-fi
-
-# Build session name: for worktrees use <project>-<worktree>, else just basename
-parent=$(basename "$(dirname "$selected")")
-base=$(basename "$selected" | tr . _)
-if [[ -d "$(dirname "$selected")/.bare" ]]; then
-    selected_name="${parent}-${base}"
-else
-    selected_name="$base"
-fi
-
-tmux_running=$(pgrep tmux)
-
-is_worktree=false
-if [[ -d "$(dirname "$selected")/.bare" ]] && [[ "$selected" != "$(dirname "$selected")" ]]; then
-    is_worktree=true
-fi
-
-setup_windows() {
-    tmux send-keys -t "$selected_name:1" "vim ." Enter
-    tmux neww -dt "$selected_name" -c "$selected"
-    tmux send-keys -t "$selected_name:2" "opencode ." Enter
-    tmux neww -dt "$selected_name" -c "$selected"
-    tmux select-window -t "$selected_name:3"
+die() {
+    printf 'tmux-sessionizer-v2: %s\n' "$*" >&2
+    exit 1
 }
 
-if [[ -z $TMUX ]] && [[ -z $tmux_running ]]; then
-    tmux new-session -ds "$selected_name" -c "$selected"
-    [[ $is_worktree == true ]] && setup_windows
-    tmux attach-session -t "$selected_name"
-    exit 0
-fi
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
 
-if ! tmux has-session -t="$selected_name" 2> /dev/null; then
-    tmux new-session -ds "$selected_name" -c "$selected"
-    [[ $is_worktree == true ]] && setup_windows
-fi
+ensure_dependencies() {
+    require_command fzf
+    require_command gh
+    require_command git
+    require_command jq
+    require_command tmux
+}
 
-tmux switch-client -t "$selected_name"
+ensure_gh_auth() {
+    if gh auth status >/dev/null 2>&1; then
+        return 0
+    fi
+
+    printf 'GitHub CLI is not authenticated. Launching gh auth login...\n' >&2
+    gh auth login || die "gh auth login failed"
+    gh auth status >/dev/null 2>&1 || die "gh authentication is still unavailable"
+}
+
+parse_fzf_output() {
+    local output="$1"
+    shift
+    local first="${output%%$'\n'*}"
+
+    fzf_key=""
+    fzf_value="$output"
+
+    local expected
+    for expected in "$@"; do
+        if [[ "$first" == "$expected" ]]; then
+            fzf_key="$first"
+            if [[ "$output" == *$'\n'* ]]; then
+                fzf_value="${output#*$'\n'}"
+            else
+                fzf_value=""
+            fi
+            return 0
+        fi
+    done
+
+    if [[ -z "$first" && "$output" == *$'\n'* ]]; then
+        fzf_value="${output#*$'\n'}"
+    fi
+}
+
+list_initial_dirs() {
+    local roots=("$HOME" "$HOME/personal" "$HOME/work" "$HOME/workspaces" "$HOME/.dotfiles")
+    local root
+
+    for root in "${roots[@]}"; do
+        [[ -d "$root" ]] || continue
+        find "$root" -mindepth 1 -maxdepth 1 -type d
+    done | sort -u
+}
+
+find_project_root() {
+    local dir="$1"
+
+    while [[ "$dir" != "/" && -n "$dir" ]]; do
+        if [[ -d "$dir/.bare" ]]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+
+    return 1
+}
+
+find_context_root() {
+    local dir="$1"
+
+    while [[ "$dir" != "/" && -n "$dir" ]]; do
+        if [[ -f "$dir/.contextizer" ]]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+
+    return 1
+}
+
+is_context_dir() {
+    [[ -f "$1/.contextizer" ]]
+}
+
+matching_context_for_worktree() {
+    local selected="$1"
+    local branch_dir context_dir
+
+    branch_dir=$(basename "$selected")
+    context_dir="$WORKSPACES/$branch_dir"
+
+    if [[ "$selected" == "$WORKSPACES"/*/* && -f "$context_dir/.contextizer" ]]; then
+        printf '%s\n' "$context_dir"
+        return 0
+    fi
+
+    return 1
+}
+
+is_worktree_dir() {
+    local selected="$1"
+    local project_root
+
+    project_root=$(find_project_root "$selected" 2>/dev/null) || return 1
+    [[ "$selected" != "$project_root" ]]
+}
+
+session_name_for_dir() {
+    local selected="$1"
+    local parent base
+
+    parent=$(basename "$(dirname "$selected")")
+    base=$(basename "$selected" | tr . _)
+
+    if [[ -d "$(dirname "$selected")/.bare" ]]; then
+        printf '%s\n' "${parent}-${base}"
+    else
+        printf '%s\n' "$base"
+    fi
+}
+
+setup_worktree_windows() {
+    local session_name="$1"
+    local selected="$2"
+    local context_dir opencode_config config_q context_q command opencode_window shell_window
+
+    tmux send-keys -t "$session_name:1" "vim ." Enter
+
+    context_dir=$(matching_context_for_worktree "$selected" 2>/dev/null || true)
+    if [[ -n "$context_dir" ]]; then
+        opencode_config="$context_dir/.opencode-context.json"
+        [[ -f "$opencode_config" ]] || die "missing opencode context config: $opencode_config"
+
+        opencode_window=$(tmux neww -dP -F '#{window_id}' -t "$session_name" -n "opencode" -c "$context_dir") \
+            || die "failed to create opencode tmux window"
+        printf -v config_q '%q' "$opencode_config"
+        printf -v context_q '%q' "$context_dir"
+        command="OPENCODE_CONFIG=$config_q opencode $context_q"
+        tmux send-keys -t "$opencode_window" "$command" Enter
+    else
+        opencode_window=$(tmux neww -dP -F '#{window_id}' -t "$session_name" -c "$selected") \
+            || die "failed to create opencode tmux window"
+        tmux send-keys -t "$opencode_window" "opencode" Enter
+    fi
+
+    shell_window=$(tmux neww -dP -F '#{window_id}' -t "$session_name" -c "$selected") \
+        || die "failed to create shell tmux window"
+    tmux select-window -t "$shell_window"
+}
+
+setup_context_windows() {
+    local session_name="$1"
+    local context_dir="$2"
+    local context_file="$context_dir/.contextizer"
+    local opencode_config="$context_dir/.opencode-context.json"
+    local config_q context_q command repo_root worktree_dir window_name window_id
+
+    [[ -f "$context_file" ]] || die "missing context metadata: $context_file"
+    [[ -f "$opencode_config" ]] || die "missing opencode context config: $opencode_config"
+
+    jq -e '.version == 1 and (.repos | type == "array")' "$context_file" >/dev/null \
+        || die "invalid context metadata: $context_file"
+
+    tmux rename-window -t "$session_name:1" "opencode"
+    printf -v config_q '%q' "$opencode_config"
+    printf -v context_q '%q' "$context_dir"
+    command="OPENCODE_CONFIG=$config_q opencode $context_q"
+    tmux send-keys -t "$session_name:1" "$command" Enter
+
+    while IFS=$'\t' read -r repo_root worktree_dir; do
+        [[ -n "$repo_root" && -n "$worktree_dir" ]] || continue
+        if [[ ! -d "$worktree_dir" ]]; then
+            printf 'Skipping missing context worktree: %s\n' "$worktree_dir" >&2
+            continue
+        fi
+
+        window_name=$(basename "$repo_root")
+        window_id=$(tmux new-window -d -P -F '#{window_id}' -t "$session_name" -n "$window_name" -c "$worktree_dir") \
+            || die "failed to create tmux window for context repo: $repo_root"
+        tmux send-keys -t "$window_id" "vim ." Enter
+    done < <(jq -r '.repos[] | [.repo_root, .worktree_dir] | @tsv' "$context_file")
+
+    tmux select-window -t "$session_name:1"
+}
+
+open_tmux_session() {
+    local selected="$1"
+    local selected_name tmux_running worktree context
+
+    [[ -d "$selected" ]] || die "selected directory does not exist: $selected"
+
+    selected_name=$(session_name_for_dir "$selected")
+    tmux_running=$(pgrep tmux 2>/dev/null || true)
+    worktree=false
+    context=false
+    is_worktree_dir "$selected" && worktree=true
+    is_context_dir "$selected" && context=true
+
+    if ! tmux has-session -t="$selected_name" 2>/dev/null; then
+        tmux new-session -ds "$selected_name" -c "$selected" || die "failed to create tmux session: $selected_name"
+        if [[ "$context" == true ]]; then
+            setup_context_windows "$selected_name" "$selected"
+        elif [[ "$worktree" == true ]]; then
+            setup_worktree_windows "$selected_name" "$selected"
+        fi
+    fi
+
+    if [[ -n "${TMUX:-}" ]]; then
+        tmux switch-client -t "$selected_name" || die "failed to switch to tmux session: $selected_name"
+    elif [[ -n "$tmux_running" ]]; then
+        tmux attach-session -t "$selected_name" || die "failed to attach to tmux session: $selected_name"
+    else
+        tmux attach-session -t "$selected_name" || die "failed to attach to tmux session: $selected_name"
+    fi
+}
+
+prompt_with_default() {
+    local prompt="$1"
+    local default="$2"
+    local value
+
+    printf '%s [%s]: ' "$prompt" "$default" >&2
+    read -r value || return 1
+    printf '%s\n' "${value:-$default}"
+}
+
+prompt_required() {
+    local prompt="$1"
+    local value
+
+    while true; do
+        printf '%s: ' "$prompt" >&2
+        read -r value || return 1
+        [[ -n "$value" ]] && {
+            printf '%s\n' "$value"
+            return 0
+        }
+        printf 'Value cannot be empty.\n' >&2
+    done
+}
+
+prompt_unique_child_dir() {
+    local parent="$1"
+    local default="$2"
+    local prompt="$3"
+    local name path
+
+    while true; do
+        name=$(prompt_with_default "$prompt" "$default") || return 1
+        [[ -n "$name" ]] || continue
+
+        if [[ "$name" == "." || "$name" == ".." || "$name" == */* ]]; then
+            printf 'Use a plain directory name without slashes.\n' >&2
+            continue
+        fi
+
+        path="$parent/$name"
+        if [[ -e "$path" ]]; then
+            printf '%s already exists. Choose a different name.\n' "$path" >&2
+            continue
+        fi
+
+        printf '%s\n' "$name"
+        return 0
+    done
+}
+
+repo_name_from_url() {
+    local url="$1"
+    local name
+
+    url="${url%/}"
+    name="${url##*/}"
+    name="${name%.git}"
+    printf '%s\n' "$name"
+}
+
+refresh_repo_cache() {
+    mkdir -p "$CACHE_DIR" || die "failed to create cache directory: $CACHE_DIR"
+
+    local tmp_dir user_repos search_repos combined
+    tmp_dir=$(mktemp -d "$CACHE_DIR/tmp.XXXXXX") || die "failed to create cache temp directory"
+    user_repos="$tmp_dir/user-repos.json"
+    search_repos="$tmp_dir/search-repos.json"
+    combined="$tmp_dir/repos.json"
+
+    printf 'Refreshing GitHub repo cache...\n' >&2
+
+    if ! gh api --paginate -X GET /user/repos \
+        -f affiliation=owner \
+        -f visibility=all \
+        -f per_page=100 \
+        --jq '.[] | select(.owner.login == "tmlamb") | {full_name, name, ssh_url, html_url, source: "user:tmlamb"}' \
+        >"$user_repos"; then
+        rm -rf "$tmp_dir"
+        die "failed to fetch tmlamb repositories"
+    fi
+
+    if ! gh api --paginate -X GET /search/repositories \
+        -f q='org:capitalone c1s in:name' \
+        -f per_page=100 \
+        --jq '.items[] | {full_name, name, ssh_url, html_url, source: "search:capitalone c1s"}' \
+        >"$search_repos"; then
+        rm -rf "$tmp_dir"
+        die "failed to search capitalone repositories"
+    fi
+
+    if ! jq -s 'unique_by(.full_name) | sort_by(.full_name)' "$user_repos" "$search_repos" >"$combined"; then
+        rm -rf "$tmp_dir"
+        die "failed to build repo cache"
+    fi
+
+    mv "$combined" "$REPO_CACHE" || {
+        rm -rf "$tmp_dir"
+        die "failed to update repo cache"
+    }
+
+    rm -rf "$tmp_dir"
+}
+
+repo_cache_lines() {
+    jq -r '.[] | [.full_name, .source, .ssh_url, .name] | @tsv' "$REPO_CACHE"
+}
+
+choose_repo() {
+    local output line repo_url repo_name
+
+    if [[ ! -s "$REPO_CACHE" ]]; then
+        refresh_repo_cache
+    fi
+
+    while true; do
+        output=$(repo_cache_lines | fzf \
+            --prompt='repo> ' \
+            --delimiter=$'\t' \
+            --with-nth=1 \
+            --expect=ctrl-n,ctrl-r \
+            --header='ctrl-n: custom repo URL | ctrl-r: refresh cache' || true)
+
+        [[ -n "$output" ]] || exit 0
+        parse_fzf_output "$output" ctrl-n ctrl-r
+
+        case "$fzf_key" in
+            ctrl-r)
+                refresh_repo_cache
+                continue
+                ;;
+            ctrl-n)
+                repo_url=$(prompt_required 'full repository URL') || exit 0
+                repo_name=$(repo_name_from_url "$repo_url")
+                repo_name="${repo_name:-repo}"
+                printf '%s\t%s\n' "$repo_url" "$repo_name"
+                return 0
+                ;;
+        esac
+
+        line="$fzf_value"
+        [[ -n "$line" ]] || exit 0
+
+        repo_url=$(printf '%s\n' "$line" | cut -f3)
+        repo_name=$(printf '%s\n' "$line" | cut -f4)
+
+        [[ -n "$repo_url" && -n "$repo_name" ]] || die "invalid repo selection"
+        printf '%s\t%s\n' "$repo_url" "$repo_name"
+        return 0
+    done
+}
+
+safe_remove_new_repo_dir() {
+    local repo_dir="$1"
+
+    case "$repo_dir" in
+        "$WORKSPACES"/*)
+            rm -rf "$repo_dir"
+            ;;
+        *)
+            printf 'Refusing to clean up unexpected path: %s\n' "$repo_dir" >&2
+            ;;
+    esac
+}
+
+get_default_branch() {
+    local project_root="$1"
+    local bare_dir="$project_root/.bare"
+    local branch
+
+    branch=$(git -C "$bare_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    branch="${branch#refs/heads/}"
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    branch=$(git -C "$project_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+    branch="${branch#origin/}"
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    branch=$(git -C "$project_root" branch -r --format='%(refname:short)' 2>/dev/null | sed 's#^origin/##' | sed '/^HEAD$/d' | sort -u | fzf --prompt='default branch> ' || true)
+    [[ -n "$branch" ]] || return 1
+    printf '%s\n' "$branch"
+}
+
+resolve_branch_ref() {
+    local project_root="$1"
+    local branch="$2"
+
+    if git -C "$project_root" show-ref --verify --quiet "refs/heads/$branch"; then
+        printf '%s\n' "$branch"
+    elif git -C "$project_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        printf '%s\n' "origin/$branch"
+    else
+        printf '%s\n' "$branch"
+    fi
+}
+
+setup_bare_repo() {
+    local repo_url="$1"
+    local repo_dir="$2"
+    local bare_dir="$repo_dir/.bare"
+    local default_branch
+
+    mkdir -p "$repo_dir" || die "failed to create repo directory: $repo_dir"
+
+    printf 'Cloning %s into %s...\n' "$repo_url" "$repo_dir" >&2
+    if ! git clone --bare "$repo_url" "$bare_dir" >&2; then
+        safe_remove_new_repo_dir "$repo_dir"
+        die "bare clone failed"
+    fi
+
+    if ! printf 'gitdir: ./.bare\n' >"$repo_dir/.git"; then
+        safe_remove_new_repo_dir "$repo_dir"
+        die "failed to write $repo_dir/.git"
+    fi
+
+    if ! git -C "$bare_dir" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' >&2; then
+        safe_remove_new_repo_dir "$repo_dir"
+        die "failed to configure remote fetch refspec"
+    fi
+
+    if ! git -C "$repo_dir" fetch origin >&2; then
+        safe_remove_new_repo_dir "$repo_dir"
+        die "failed to fetch origin"
+    fi
+
+    default_branch=$(get_default_branch "$repo_dir") || {
+        safe_remove_new_repo_dir "$repo_dir"
+        die "failed to determine default branch"
+    }
+
+    if ! git -C "$repo_dir" worktree add "$repo_dir/$default_branch" "$default_branch" >&2; then
+        safe_remove_new_repo_dir "$repo_dir"
+        die "failed to add default branch worktree: $default_branch"
+    fi
+
+    printf '%s\n' "$repo_dir/$default_branch"
+}
+
+create_repo_flow() {
+    local repo_selection repo_url repo_name dir_name repo_dir worktree_path status
+
+    mkdir -p "$WORKSPACES" || die "failed to create workspaces directory: $WORKSPACES"
+
+    repo_selection=$(choose_repo)
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+    [[ -n "$repo_selection" ]] || exit 0
+
+    repo_url=$(printf '%s\n' "$repo_selection" | cut -f1)
+    repo_name=$(printf '%s\n' "$repo_selection" | cut -f2)
+
+    dir_name=$(prompt_unique_child_dir "$WORKSPACES" "$repo_name" 'directory name') || exit 0
+    repo_dir="$WORKSPACES/$dir_name"
+    worktree_path=$(setup_bare_repo "$repo_url" "$repo_dir")
+    status=$?
+    [[ $status -eq 0 ]] || exit "$status"
+
+    open_tmux_session "$worktree_path"
+}
+
+list_worktrees() {
+    local project_root="$1"
+    local bare_dir="$project_root/.bare"
+    local line path
+
+    git -C "$bare_dir" worktree list --porcelain | while IFS= read -r line; do
+        case "$line" in
+            worktree\ *)
+                path="${line#worktree }"
+                [[ "$path" == "$bare_dir" ]] && continue
+                printf '%s\t%s\n' "$(basename "$path")" "$path"
+                ;;
+        esac
+    done | sort -u
+}
+
+list_branches() {
+    local project_root="$1"
+
+    git -C "$project_root" for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin 2>/dev/null \
+        | sed 's#^origin/##' \
+        | sed '/^HEAD$/d' \
+        | sort -u
+}
+
+create_worktree_flow() {
+    local project_root="$1"
+    local output branch new_branch branch_ref default_branch default_dir worktree_dir worktree_path
+
+    output=$(list_branches "$project_root" | fzf \
+        --prompt='branch> ' \
+        --expect=ctrl-n \
+        --header='ctrl-n: create new branch from default branch' || true)
+
+    [[ -n "$output" ]] || exit 0
+    parse_fzf_output "$output" ctrl-n
+
+    new_branch=false
+    if [[ "$fzf_key" == ctrl-n ]]; then
+        branch=$(prompt_required 'new branch name') || exit 0
+        new_branch=true
+    else
+        branch="$fzf_value"
+    fi
+
+    [[ -n "$branch" ]] || exit 0
+
+    default_dir="${branch//\//-}"
+    worktree_dir=$(prompt_unique_child_dir "$project_root" "$default_dir" 'worktree dir') || exit 0
+    worktree_path="$project_root/$worktree_dir"
+
+    if [[ "$new_branch" == true ]]; then
+        default_branch=$(get_default_branch "$project_root") || die "failed to determine default branch"
+        branch_ref=$(resolve_branch_ref "$project_root" "$default_branch")
+        git -C "$project_root" worktree add -b "$branch" "$worktree_path" "$branch_ref" \
+            || die "failed to create worktree for new branch: $branch"
+    elif git -C "$project_root" show-ref --verify --quiet "refs/heads/$branch"; then
+        git -C "$project_root" worktree add "$worktree_path" "$branch" \
+            || die "failed to add worktree for branch: $branch"
+    elif git -C "$project_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        git -C "$project_root" worktree add --track -b "$branch" "$worktree_path" "origin/$branch" \
+            || die "failed to add tracking worktree for branch: $branch"
+    else
+        die "branch not found: $branch"
+    fi
+
+    open_tmux_session "$worktree_path"
+}
+
+choose_worktree_or_create() {
+    local project_root="$1"
+    local output selected_path
+
+    output=$(list_worktrees "$project_root" | fzf \
+        --prompt='worktree> ' \
+        --delimiter=$'\t' \
+        --with-nth=1 \
+        --expect=ctrl-n \
+        --header='ctrl-n: new branch worktree' || true)
+
+    [[ -n "$output" ]] || exit 0
+    parse_fzf_output "$output" ctrl-n
+
+    if [[ "$fzf_key" == ctrl-n ]]; then
+        create_worktree_flow "$project_root"
+        return 0
+    fi
+
+    selected_path=$(printf '%s\n' "$fzf_value" | cut -f2)
+    [[ -n "$selected_path" ]] || exit 0
+    open_tmux_session "$selected_path"
+}
+
+handle_selected_dir() {
+    local selected="$1"
+    local project_root context_root
+
+    [[ -n "$selected" ]] || exit 0
+
+    context_root=$(find_context_root "$selected" 2>/dev/null || true)
+    if [[ -n "$context_root" ]]; then
+        open_tmux_session "$context_root"
+        return 0
+    fi
+
+    if [[ -d "$selected/.bare" ]]; then
+        choose_worktree_or_create "$selected"
+        return 0
+    fi
+
+    project_root=$(find_project_root "$selected" 2>/dev/null || true)
+    if [[ -n "$project_root" && "$selected" == "$project_root" ]]; then
+        choose_worktree_or_create "$project_root"
+        return 0
+    fi
+
+    open_tmux_session "$selected"
+}
+
+main() {
+    local output selected
+
+    ensure_dependencies
+    ensure_gh_auth
+
+    if [[ $# -eq 1 ]]; then
+        handle_selected_dir "$1"
+        return 0
+    elif [[ $# -gt 1 ]]; then
+        die "usage: tmux-sessionizer-v2 [directory]"
+    fi
+
+    output=$(list_initial_dirs | fzf \
+        --prompt='session> ' \
+        --expect=ctrl-n \
+        --header='ctrl-n: clone new repo' || true)
+
+    [[ -n "$output" ]] || exit 0
+    parse_fzf_output "$output" ctrl-n
+
+    if [[ "$fzf_key" == ctrl-n ]]; then
+        create_repo_flow
+        return 0
+    fi
+
+    selected="$fzf_value"
+    handle_selected_dir "$selected"
+}
+
+main "$@"

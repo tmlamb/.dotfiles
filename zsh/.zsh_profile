@@ -25,6 +25,5 @@ addToPathFront /usr/local/go/bin
 addToPathFront $HOME/tom/.opencode/bin
 
 bindkey -s ^f "tmux-sessionizer\n"
-bindkey -s ^g "repo-worktreeizer\n"
-bindkey -s ^o "worktree-branchizer\n"
+bindkey -s ^g "dir-contextizer\n"
 
