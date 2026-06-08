@@ -4,7 +4,7 @@ set -uo pipefail
 
 WORKSPACES="$HOME/workspaces"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-TMUX_SESSIONIZER="$SCRIPT_DIR/tmux-sessionizer-v2"
+TMUX_SESSIONIZER="$SCRIPT_DIR/tmux-sessionizer"
 
 fzf_key=""
 fzf_value=""
@@ -31,7 +31,7 @@ open_context_session() {
     if [[ -x "$TMUX_SESSIONIZER" ]]; then
         "$TMUX_SESSIONIZER" "$context_dir"
     else
-        tmux-sessionizer-v2 "$context_dir"
+        tmux-sessionizer "$context_dir"
     fi
 }
 

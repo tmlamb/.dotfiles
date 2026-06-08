@@ -3,14 +3,14 @@
 set -uo pipefail
 
 WORKSPACES="$HOME/workspaces"
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-sessionizer-v2"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-sessionizer"
 REPO_CACHE="$CACHE_DIR/repos.json"
 
 fzf_key=""
 fzf_value=""
 
 die() {
-    printf 'tmux-sessionizer-v2: %s\n' "$*" >&2
+    printf 'tmux-sessionizer: %s\n' "$*" >&2
     exit 1
 }
 
@@ -438,11 +438,19 @@ resolve_branch_ref() {
     fi
 }
 
+branch_ref_exists() {
+    local project_root="$1"
+    local branch="$2"
+
+    git -C "$project_root" show-ref --verify --quiet "refs/heads/$branch" || \
+        git -C "$project_root" show-ref --verify --quiet "refs/remotes/origin/$branch"
+}
+
 setup_bare_repo() {
     local repo_url="$1"
     local repo_dir="$2"
     local bare_dir="$repo_dir/.bare"
-    local default_branch
+    local default_branch branch_ref
 
     mkdir -p "$repo_dir" || die "failed to create repo directory: $repo_dir"
 
@@ -472,9 +480,15 @@ setup_bare_repo() {
         die "failed to determine default branch"
     }
 
-    if ! git -C "$repo_dir" worktree add "$repo_dir/$default_branch" "$default_branch" >&2; then
+    if branch_ref_exists "$repo_dir" "$default_branch"; then
+        branch_ref=$(resolve_branch_ref "$repo_dir" "$default_branch")
+        if ! git -C "$repo_dir" worktree add "$repo_dir/$default_branch" "$branch_ref" >&2; then
+            safe_remove_new_repo_dir "$repo_dir"
+            die "failed to add default branch worktree: $default_branch"
+        fi
+    elif ! git -C "$repo_dir" worktree add --orphan -b "$default_branch" "$repo_dir/$default_branch" >&2; then
         safe_remove_new_repo_dir "$repo_dir"
-        die "failed to add default branch worktree: $default_branch"
+        die "failed to add empty repository worktree: $default_branch"
     fi
 
     printf '%s\n' "$repo_dir/$default_branch"
@@ -631,7 +645,7 @@ main() {
         handle_selected_dir "$1"
         return 0
     elif [[ $# -gt 1 ]]; then
-        die "usage: tmux-sessionizer-v2 [directory]"
+        die "usage: tmux-sessionizer [directory]"
     fi
 
     output=$(list_initial_dirs | fzf \
