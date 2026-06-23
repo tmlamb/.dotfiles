@@ -30,6 +30,20 @@ autocmd({"BufWritePre"}, {
     command = [[%s/\s\+$//e]],
 })
 
+autocmd({ "FocusGained", "BufEnter", "WinEnter", "TermClose" }, {
+    group = TomGroup,
+    pattern = "*",
+    command = "checktime",
+})
+
+autocmd("FileChangedShellPost", {
+    group = TomGroup,
+    pattern = "*",
+    callback = function()
+        vim.notify("Reloaded file changed on disk", vim.log.levels.INFO)
+    end,
+})
+
 autocmd('LspAttach', {
   group = TomGroup,
   callback = function (e)
