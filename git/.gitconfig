@@ -5,6 +5,8 @@
   pager = delta
 [push]
 	autoSetupRemote = true
+[branch]
+  autoSetupMerge = true
 [interactive]
   diffFilter = delta --color-only
 [delta]
