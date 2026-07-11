@@ -35,6 +35,7 @@ return {
         'cssls',
         'tailwindcss',
         'gopls',
+        'clangd',
       })
 
       -- Populate workspace-wide diagnostics when ts_ls attaches

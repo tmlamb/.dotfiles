@@ -63,7 +63,7 @@ parse_fzf_output() {
 }
 
 list_initial_dirs() {
-    local roots=("$HOME" "$HOME/personal" "$HOME/work" "$HOME/workspaces" "$HOME/.dotfiles")
+    local roots=("$HOME" "$HOME/personal" "$HOME/work" "$HOME/workspaces" "$HOME/workspaces/learn" "$HOME/.dotfiles")
     local root
 
     for root in "${roots[@]}"; do

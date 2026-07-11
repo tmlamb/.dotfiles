@@ -1,7 +1,3 @@
-# Default config for sway
-#
-# Copy this to ~/.config/sway/config and edit it to your liking.
-#
 # Read `man 5 sway` for a complete reference.
 
 # allow screensharing?
@@ -39,10 +35,10 @@ output * color_profile icc ~/.local/share/icc/BOE_CQ_______NE135FBM_N41_03.icm
 # Example configuration:
 #
 exec swayidle -w \
-         timeout 600 'swaylock -f -c 000000' \
-         timeout 1200 'swaymsg "output * power off"' resume 'swaymsg "output * power on"' \
-         timeout 1800 'systemctl suspend' \
-         before-sleep 'swaylock -f -c 000000'
+         timeout 600 'sh -c "mkdir -p \"$HOME/.cache\"; printf \"%s timeout 600 lock\\n\" \"$(date --iso-8601=seconds)\" >> \"$HOME/.cache/swayidle-actions.log\"; logger -t swayidle-action \"timeout 600 lock\"; swaylock -f -c 000000"' \
+         timeout 1200 'sh -c "mkdir -p \"$HOME/.cache\"; printf \"%s timeout 1200 output off\\n\" \"$(date --iso-8601=seconds)\" >> \"$HOME/.cache/swayidle-actions.log\"; logger -t swayidle-action \"timeout 1200 output off\"; swaymsg \"output * power off\""' resume 'sh -c "mkdir -p \"$HOME/.cache\"; printf \"%s resume output on\\n\" \"$(date --iso-8601=seconds)\" >> \"$HOME/.cache/swayidle-actions.log\"; logger -t swayidle-action \"resume output on\"; swaymsg \"output * power on\""' \
+         timeout 1800 'sh -c "mkdir -p \"$HOME/.cache\"; printf \"%s timeout 1800 suspend\\n\" \"$(date --iso-8601=seconds)\" >> \"$HOME/.cache/swayidle-actions.log\"; logger -t swayidle-action \"timeout 1800 suspend\"; systemctl suspend"' \
+         before-sleep 'sh -c "mkdir -p \"$HOME/.cache\"; printf \"%s before-sleep lock\\n\" \"$(date --iso-8601=seconds)\" >> \"$HOME/.cache/swayidle-actions.log\"; logger -t swayidle-action \"before-sleep lock\"; swaylock -f -c 000000"'
 #
 # This will lock your screen after 300 seconds of inactivity, then turn off
 # your displays after another 300 seconds, and turn your screens back on when
@@ -236,4 +232,3 @@ smart_borders on
 gaps inner 0
 gaps outer 0
 default_border pixel 0
-
